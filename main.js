@@ -39,6 +39,9 @@ const mongoSanitize = require("express-mongo-sanitize")
 // database
 const connectDB = require("./db/connect")
 
+// routers
+const authRouter = require("./routes/authRoutes")
+
 app.set("trust proxy", 1)
 app.use(
   rateLimiter({
@@ -58,25 +61,19 @@ app.use(cookieParser(process.env.JWT_SECRET))
 
 const port = process.env.PORT || 5000
 const start = () => {
-  connectDB(process.env.MONGO_URL, (err) => {
-    if (err) {
-      console.log(
-        `Server is not connected to db and is not running. Err: ${err}`
+  connectDB(process.env.MONGO_URL)
+    .then(() => {
+      app.listen(port, () =>
+        console.log(
+          `Server is connected to db and listening on port ${port}...`
+        )
       )
-    } else {
-      app.listen(port, (err) => {
-        if (err) {
-          console.log(
-            `Server is connected to db but is not running. Err: ${err}`
-          )
-        } else {
-          console.log(
-            `Server is connected to db and listening on port: ${port}...`
-          )
-        }
-      })
-    }
-  })
+    })
+    .catch((err) => {
+      console.log(
+        `Something went wrong, the server is not connected to the db... \n Error Message: ${err.message} \n Error: ${err}`
+      )
+    })
 }
 
 start()
