@@ -19,7 +19,7 @@ const TokenSchema = new mongoose.Schema(
       default: true,
     },
     user: {
-      type: mongoose.Schema.objectId,
+      type: mongoose.Schema.ObjectId,
       ref: "User",
       required: true,
     },

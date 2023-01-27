@@ -47,26 +47,29 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
-UserSchema.pre("save", () => {
-  if (!this.isModified("password")) return
+UserSchema.pre("save", function (next) {
+  if (!this.isModified("password")) return next()
   bcrypt.genSalt(10, (err, salt) => {
     if (err) {
       console.log(`Server hashing functionality is failing: ${err.message}`)
+      next(err)
     } else {
       bcrypt.hash(this.password, salt, (err, password) => {
         if (err) {
           console.log(
             `${this.email} was not able to hash his password: ${err.message}`
           )
+          next(err)
         } else {
           this.password = password
+          next()
         }
       })
     }
   })
 })
 
-UserSchema.methods.comparePassword = (candidatePassword) => {
+UserSchema.methods.comparePassword = function (candidatePassword) {
   bcrypt.compare(candidatePassword, this.password, (err, result) => {
     if (err) {
       console.log(

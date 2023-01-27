@@ -36,9 +36,6 @@ const cors = require("cors")
 // searches for keys that have prohibited characters from req.body / req.query / req.params and replaces / removes those - for attackers not to change the context of a database operation
 const mongoSanitize = require("express-mongo-sanitize")
 
-// database
-const connectDB = require("./db/connect")
-
 // routers
 const authRouter = require("./routes/authRoutes")
 
@@ -58,6 +55,10 @@ app.use(mongoSanitize())
 // parses incoming JSON requests and puts the parsed data in req.body
 app.use(express.json())
 app.use(cookieParser(process.env.JWT_SECRET))
+
+app.use("/api/v1/auth", authRouter)
+
+const connectDB = require("./db/connect")
 
 const port = process.env.PORT || 5000
 const start = () => {
