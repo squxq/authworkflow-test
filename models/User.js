@@ -69,15 +69,9 @@ UserSchema.pre("save", function (next) {
   })
 })
 
-UserSchema.methods.comparePassword = function (candidatePassword) {
-  bcrypt.compare(candidatePassword, this.password, (err, result) => {
-    if (err) {
-      console.log(
-        `The server could not verify the password. User cannot be logged in. Please try again later.`
-      )
-    } else {
-      return result
-    }
-  })
+UserSchema.methods.comparePassword = async function (canditatePassword) {
+  const isMatch = await bcrypt.compare(canditatePassword, this.password)
+  return isMatch
 }
+
 module.exports = mongoose.model("User", UserSchema)
