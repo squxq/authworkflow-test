@@ -7,13 +7,17 @@ const {
   attachCookiesToResponse,
   sendVerificationEmail,
   createTokenUser,
+  sendResetPasswordEmail,
+  createHash,
 } = require("../utils")
 
 const register = (req, res) => {
   const { email, name, password } = req.body
   User.findOne({ email }, async (err, user) => {
     if (err) {
-      throw new CustomError.ServerError("DB could not be searched...")
+      throw new CustomError.ServerError(
+        "DB cousendResetPasswordEmailld not be searched..."
+      )
     } else if (user) {
       throw new CustomError.BadRequestError("Email already exists...")
     }
@@ -154,4 +158,100 @@ const login = (req, res) => {
   })
 }
 
-module.exports = { register, login, verifyEmail }
+const logout = (req, res) => {
+  Token.findOneAndDelete({ user: req.user.userId })
+
+  res.cookie("accessToken", "logout", {
+    httpOnly: true,
+    expires: new Date(Date.now()),
+  })
+
+  res.cookie("refreshToken", "logout", {
+    httpOnly: true,
+    expires: new Date(Date.now()),
+  })
+
+  res.status(StatusCodes.OK).json({ msg: "User logged out!" })
+}
+
+const forgotPassword = (req, res) => {
+  const { email } = req.body
+  if (!email) {
+    throw new CustomError.BadRequestError("Please provide a valid e-mail...")
+  }
+
+  User.findOne({ email }, async (err, user) => {
+    if (err) {
+      throw new CustomError.ServerError("DB could not be searched...")
+    } else if (!user) {
+      throw new CustomError.UnauthenticatedError("Invalid credentials...")
+    }
+
+    const passwordToken = crypto.randomBytes(70).toString("hex")
+    // send email
+
+    const protocol = req.protocol
+    const host = req.get("host")
+
+    await sendResetPasswordEmail({
+      name: user.name,
+      email: user.email,
+      token: passwordToken,
+      origin: `${protocol}://${host}`,
+    })
+
+    const passwordTokenExpirationDate = new Date(Date.now() + 600000)
+    user.passwordToken = createHash(passwordToken)
+    user.passwordTokenExpirationDate = passwordTokenExpirationDate
+
+    await user.save()
+
+    res.status(StatusCodes.OK).json({
+      msg: "Please check you e-mail for reset password link...",
+      token: passwordToken,
+    })
+  })
+}
+
+const resetPassword = (req, res) => {
+  const { token, email, password } = req.body
+
+  if (!token || !email || !password) {
+    throw new CustomError.BadRequestError("Email already exists...")
+  }
+
+  User.findOne({ email }, async (err, user) => {
+    if (err) {
+      throw new CustomError.ServerError("DB could not be searched...")
+    } else if (!user) {
+      throw new CustomError.UnauthenticatedError("Invalid credentials...")
+    }
+
+    const currentDate = new Date()
+
+    if (
+      user.passwordToken === createHash(token) &&
+      user.passwordTokenExpirationDate > currentDate
+    ) {
+      user.password = password
+      user.passwordToken = null
+      user.passwordTokenExpirationDate = null
+      await user.save()
+
+      return res.status(StatusCodes.OK).json({
+        msg: "Password reseted successfully...",
+      })
+    }
+
+    throw new CustomError.BadRequestError("Invalid credentials...")
+  })
+}
+
+module.exports = {
+  register,
+  login,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+}
