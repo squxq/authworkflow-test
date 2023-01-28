@@ -10,16 +10,21 @@ const {
   sendResetPasswordEmail,
   createHash,
 } = require("../utils")
+const jwt = require("jsonwebtoken")
 
 const register = (req, res) => {
   const { email, name, password } = req.body
+
+  if (!email || !name || !password)
+    throw new CustomError.BadRequestError("All fields are required...")
+
   User.findOne({ email }, async (err, user) => {
     if (err) {
       throw new CustomError.ServerError(
-        "DB cousendResetPasswordEmailld not be searched..."
+        `DB could not be searched... \n ${err.message}`
       )
     } else if (user) {
-      throw new CustomError.BadRequestError("Email already exists...")
+      throw new CustomError.ConflictError("Email already exists...")
     }
 
     // first registered user is an admin
@@ -38,7 +43,9 @@ const register = (req, res) => {
       },
       async (err, newUser) => {
         if (err) {
-          throw new CustomError.ServerError("User could not be created...")
+          throw new CustomError.ServerError(
+            `User could not be created... \n ${err.message}`
+          )
         }
         const protocol = req.protocol
         const host = req.get("host")
@@ -54,7 +61,7 @@ const register = (req, res) => {
 
         res.status(StatusCodes.CREATED).json({
           msg: "Success! Please check tou e-mail to verify account...",
-          token: newUser.verificationToken,
+          // token: newUser.verificationToken,
         })
       }
     )
@@ -66,11 +73,17 @@ const verifyEmail = (req, res) => {
 
   User.findOne({ email }, async (err, user) => {
     if (err) {
-      throw new CustomError.ServerError("DB could not be searched...")
+      throw new CustomError.ServerError(
+        `DB could not be searched... \n ${err.message}`
+      )
     } else if (!user) {
-      throw new CustomError.UnauthenticatedError("Verification failed...")
+      throw new CustomError.UnauthenticatedError(
+        "Verification failed. User not found..."
+      )
     } else if (user.verificationToken !== verificationToken) {
-      throw new CustomError.UnauthenticatedError("Verification failed...")
+      throw new CustomError.UnauthenticatedError(
+        "Verification failed. Invalid token..."
+      )
     }
 
     user.isVerified = true
@@ -85,7 +98,92 @@ const verifyEmail = (req, res) => {
   })
 }
 
+const handleTokens = (req, res) => {
+  // const { refreshToken } = req.signedCookies
+  // for postman
+  const { refreshToken } = req.body
+  if (!refreshToken)
+    throw new CustomError.UnauthenticatedError("No cookie was provided...")
+
+  res.clearCookie("jwt", { httpOnly: true, sameSite: "None", secure: true })
+
+  Token.findOne({ refreshToken }, (err, token) => {
+    if (err)
+      throw new CustomError.ServerError(
+        `Couldn't search the DB... \n ${err.message}`
+      )
+    if (!token) {
+      jwt.decode(refreshToken, (err, decoded) => {
+        // err if we can't decode the token
+        if (err)
+          throw new CustomError.UnauthorizedError(
+            "Token could not be decoded..."
+          )
+        // if !err its a reuse attempt
+        Token.deleteMany({ user: decoded.userId }, (err) => {
+          if (err)
+            throw new CustomError.ServerError(
+              `Tokens could not be deleted... \n ${err.message}`
+            )
+        })
+      })
+      return res.status(StatusCodes.FORBIDDEN).json({
+        msg: "Clients are not allowed to perform this action...",
+      })
+    }
+
+    User.findOne({ _id: token.user }, (err, user) => {
+      if (err)
+        throw new CustomError.ServerError(
+          `DB could not be searched... \n ${err.message}`
+        )
+
+      jwt.verify(refreshToken, process.env.JWT_SECRET, (err, decoded) => {
+        console.log(user._id, decoded)
+        if (err) {
+          Token.findOneAndDelete({ _id: token._id }, (err, docs) => {
+            if (err)
+              throw new CustomError.ServerError(
+                `Token could not be deleted... \n ${err.message}`
+              )
+          })
+        }
+        // if (err || user._id !== decoded.userId)
+        // throw new CustomError.UnauthorizedError("Invalid token...")
+
+        const tokenUser = createTokenUser(user)
+
+        // refresh token was still valid
+        const newRefreshToken = crypto.randomBytes(40).toString("hex")
+        const userAgent = req.headers["user-agent"]
+        const ip = req.ip
+        const userToken = {
+          refreshToken: newRefreshToken,
+          ip,
+          userAgent,
+          user: user._id,
+        }
+
+        Token.create(userToken, (err, newUserToken) => {
+          if (err) {
+            throw new CustomError.ServerError(
+              "DB was not able to create the token..."
+            )
+          }
+
+          attachCookiesToResponse({ res, user: tokenUser, newRefreshToken })
+
+          res.status(StatusCodes.OK).json({ user: tokenUser, newRefreshToken })
+        })
+      })
+    })
+  })
+}
+
 const login = (req, res) => {
+  // const { refreshToken } = req.signedCookies
+  // for postman
+  const { refreshToken } = req.body
   const { email, password } = req.body
 
   if (!email || !password) {
@@ -96,7 +194,9 @@ const login = (req, res) => {
 
   User.findOne({ email }, async (err, user) => {
     if (err) {
-      throw new CustomError.ServerError("DB could not be searched...")
+      throw new CustomError.ServerError(
+        `DB could not be searched... \n ${err.message}`
+      )
     } else if (!user) {
       throw new CustomError.UnauthenticatedError("Invalid credentials...")
     }
@@ -113,62 +213,79 @@ const login = (req, res) => {
         )
       }
 
+      if (refreshToken) {
+        Token.findOneAndDelete({ refreshToken }, (err, deletedToken) => {
+          if (err)
+            throw new CustomError.ServerError(
+              `DB could not delete token... \n ${err.message}`
+            )
+        })
+        res.cookie("refreshToken", "logout", {
+          httpOnly: true,
+          expires: new Date(Date.now()),
+        })
+      }
+
+      // creates an object with name, id and role fields for each user
       const tokenUser = createTokenUser(user)
-
       // create refresh token
-      let refreshToken = ""
-      // check for existing token
-      Token.findOne({ user: user._id }, (err, token) => {
+      const newRefreshToken = crypto.randomBytes(40).toString("hex")
+      const userAgent = req.headers["user-agent"]
+      const ip = req.ip
+      const userToken = {
+        refreshToken: newRefreshToken,
+        ip,
+        userAgent,
+        user: user._id,
+      }
+
+      Token.create(userToken, (err, newUserToken) => {
         if (err) {
-          throw new CustomError.ServerError("DB could not be searched...")
+          throw new CustomError.ServerError(
+            `DB was not able to create the token... \n ${err.message}`
+          )
         }
-        if (token) {
-          const { isValid } = token
-          if (!isValid) {
-            throw new CustomError.UnauthenticatedError("Invalid Credentials...")
-          }
 
-          refreshToken = token.refreshToken
-          attachCookiesToResponse({ res, user: tokenUser, refreshToken })
-          res.status(StatusCodes.OK).json({ user: tokenUser })
-        } else if (!token) {
-          refreshToken = crypto.randomBytes(40).toString("hex")
-          const userAgent = req.headers["user-agent"]
-          const ip = req.ip
-          const userToken = { refreshToken, ip, userAgent, user: user._id }
+        attachCookiesToResponse({ res, user: tokenUser, newRefreshToken })
 
-          Token.create(userToken, (err, newUserToken) => {
-            if (err) {
-              throw new CustomError.ServerError(
-                "DB was not able to create the token..."
-              )
-            }
-
-            attachCookiesToResponse({ res, user: tokenUser, refreshToken })
-
-            res.status(StatusCodes.OK).json({ user: tokenUser })
-          })
-        }
+        res.status(StatusCodes.OK).json({ user: tokenUser, newRefreshToken })
       })
-    } else {
-      throw new CustomError.ServerError(
-        "Password could not be verified. User not logged in..."
-      )
     }
   })
 }
 
 const logout = (req, res) => {
   Token.findOneAndDelete({ user: req.user.userId })
+  // const { refreshToken } = req.signedCookies
+  // for postman
+  const { refreshToken } = req.body
 
   res.cookie("accessToken", "logout", {
     httpOnly: true,
     expires: new Date(Date.now()),
   })
 
-  res.cookie("refreshToken", "logout", {
-    httpOnly: true,
-    expires: new Date(Date.now()),
+  // is refresh token in DB
+  Token.findOne({ refreshToken }, (err, token) => {
+    if (err)
+      throw CustomError.ServerError(
+        `DB could not search for the token... \n ${err.message}`
+      )
+    if (token) {
+      Token.findOneAndDelete({ refreshToken }, (err, deletedToken) => {
+        if (err)
+          throw new CustomError.ServerError(
+            `Token not deleted... \n ${err.message}`
+          )
+      })
+    }
+    res.cookie("refreshToken", "logout", {
+      httpOnly: true,
+      expires: new Date(Date.now()),
+    })
+    return res
+      .status(StatusCodes.NO_CONTENT)
+      .json({ msg: "No token. Logout successful" })
   })
 
   res.status(StatusCodes.OK).json({ msg: "User logged out!" })
@@ -249,6 +366,7 @@ const resetPassword = (req, res) => {
 
 module.exports = {
   register,
+  handleTokens,
   login,
   logout,
   verifyEmail,

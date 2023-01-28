@@ -4,12 +4,15 @@ const { authenticateUser } = require("../middleware/authentication")
 
 const {
   register,
+  handleTokens,
   login,
   logout,
   verifyEmail,
   forgotPassword,
   resetPassword,
 } = require("../controllers/authController")
+
+router.get("/token", handleTokens)
 
 router.post("/register", register)
 router.post("/login", login)
